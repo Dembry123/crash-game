@@ -6,43 +6,49 @@ const { startGameLoop } = require('./game');
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
-  cors: { origin: '*' }  // Allow from anywhere; restrict in production
+  cors: { origin: '*' }
 });
 
-// In-memory storage (replace with DB later)
-const users = new Map();  // socket.id -> { balance: 1000 }
-const activeBets = new Map();  // socket.id -> { bet: 10, cashedOutAt: null }
+const users = new Map();
+const activeBets = new Map();
 
-// Game state
 let gameState = {
-  phase: 'waiting',  // 'waiting', 'running', 'crashed'
+  phase: 'waiting',
   multiplier: 1,
   crashPoint: 0,
-  countdown: 10,     // Seconds until round starts
+  countdown: 10,
 };
 
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
-  users.set(socket.id, { balance: 1000 });  // New user starts with $1000
+  users.set(socket.id, { balance: 1000, name: null });
 
-  // Send initial state
-  socket.emit('gameUpdate', { ...gameState, balance: users.get(socket.id).balance });
+  const user = users.get(socket.id);
+  socket.emit('gameUpdate', { ...gameState, balance: user.balance, name: user.name });
+
+  socket.on('setName', (name) => {
+    const user = users.get(socket.id);
+    if (name && typeof name === 'string' && name.trim() && !user.name) {
+      user.name = name.trim();
+      socket.emit('userUpdate', { balance: user.balance, name: user.name });
+    }
+  });
 
   socket.on('placeBet', (betAmount) => {
-    if (gameState.phase !== 'waiting' || betAmount <= 0) return;
     const user = users.get(socket.id);
+    if (gameState.phase !== 'waiting' || betAmount <= 0 || !user.name) return;
     if (betAmount > user.balance) return;
 
     user.balance -= betAmount;
     activeBets.set(socket.id, { bet: betAmount, cashedOutAt: null });
     socket.emit('balanceUpdate', user.balance);
-    io.emit('betPlaced', { userId: socket.id, bet: betAmount });  // Broadcast to show others' bets
+    io.emit('betPlaced', { userId: socket.id, bet: betAmount });
   });
 
   socket.on('cashOut', () => {
     if (gameState.phase !== 'running' || !activeBets.has(socket.id)) return;
     const bet = activeBets.get(socket.id);
-    if (bet.cashedOutAt) return;  // Already cashed out
+    if (bet.cashedOutAt) return;
 
     bet.cashedOutAt = gameState.multiplier;
     const user = users.get(socket.id);
@@ -60,7 +66,6 @@ io.on('connection', (socket) => {
   });
 });
 
-// Start the game loop (handles phases and broadcasts)
 startGameLoop(io, gameState, activeBets, users);
 
 const PORT = process.env.PORT || 3001;

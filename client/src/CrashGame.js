@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import io from 'socket.io-client';
 
-const SOCKET_URL = 'http://localhost:3001';  // Your server URL
+const SOCKET_URL = 'http://localhost:3001';
 
 function CrashGame() {
   const [balance, setBalance] = useState(1000);
@@ -10,11 +10,44 @@ function CrashGame() {
   const [phase, setPhase] = useState('waiting');
   const [countdown, setCountdown] = useState(10);
   const [hasBet, setHasBet] = useState(false);
+  const [userName, setUserName] = useState('');
+  const [nameInput, setNameInput] = useState('');
+  const [leaderboard, setLeaderboard] = useState([]);
   const canvasRef = useRef(null);
   const timeRef = useRef(0);
   const particlesRef = useRef([]);
   const trailRef = useRef([]);
   const socket = useRef(null);
+  const lastMultiplierRef = useRef(1);
+  const lastUpdateTimeRef = useRef(Date.now());
+
+  const CANVAS_WIDTH = 1200;
+  const CANVAS_HEIGHT = 800;
+  const SCALE = 2;
+  const FACTOR_X = CANVAS_WIDTH / 6;
+  const FACTOR_Y = CANVAS_HEIGHT / 4;
+  const MARGIN = 50;
+
+  const updateParticles = useCallback((worldX, worldY) => {
+    if (phase === 'running' && particlesRef.current.length < 200) {
+      for (let i = 0; i < 4; i++) {
+        particlesRef.current.push({
+          worldX: worldX + (Math.random() - 0.5) * 20,
+          worldY: worldY - 20,
+          vx: (Math.random() - 0.5) * 4,
+          vy: -(2 + Math.random() * 4),
+          life: 1.0,
+        });
+      }
+    }
+    particlesRef.current.forEach(p => {
+      p.worldX += p.vx;
+      p.worldY += p.vy;
+      p.life -= 0.02;
+      if (p.life < 0) console.warn('Negative life detected:', p.life);
+    });
+    particlesRef.current = particlesRef.current.filter(p => p.life > 0);
+  }, [phase]);
 
   useEffect(() => {
     socket.current = io(SOCKET_URL);
@@ -24,18 +57,24 @@ function CrashGame() {
       setMultiplier(data.multiplier);
       setBalance(data.balance);
       setCountdown(data.countdown || 0);
+      setUserName(data.name || '');
+    });
+
+    socket.current.on('userUpdate', (data) => {
+      setBalance(data.balance);
+      setUserName(data.name || '');
     });
 
     socket.current.on('multiplierUpdate', (newMultiplier) => {
       setMultiplier(newMultiplier);
-      // Update canvas here (adapt your drawGraph to use server multiplier)
-      drawGraph(canvasRef.current.getContext('2d'));
+      lastMultiplierRef.current = newMultiplier;
+      lastUpdateTimeRef.current = Date.now();
     });
 
     socket.current.on('waitingPhase', ({ countdown }) => {
       setPhase('waiting');
       setCountdown(countdown);
-      setHasBet(false);  // Reset for new round
+      setHasBet(false);
       timeRef.current = 0;
       trailRef.current = [];
       particlesRef.current = [];
@@ -48,7 +87,6 @@ function CrashGame() {
     socket.current.on('gameCrashed', ({ crashPoint }) => {
       setPhase('crashed');
       alert(`Crashed at ${crashPoint.toFixed(2)}x!`);
-      // Handle loss if not cashed out
     });
 
     socket.current.on('balanceUpdate', (newBalance) => setBalance(newBalance));
@@ -56,11 +94,20 @@ function CrashGame() {
       alert(`Cashed out at ${multiplier.toFixed(2)}x! Won $${winnings.toFixed(2)}`);
     });
 
+    socket.current.on('leaderboardUpdate', (lb) => setLeaderboard(lb));
+
     return () => socket.current.disconnect();
   }, []);
 
+  const setMyName = () => {
+    if (nameInput.trim()) {
+      socket.current.emit('setName', nameInput.trim());
+      setNameInput('');
+    }
+  };
+
   const placeBet = () => {
-    if (phase !== 'waiting' || bet > balance || bet <= 0 || hasBet) return;
+    if (phase !== 'waiting' || bet > balance || bet <= 0 || hasBet || !userName) return;
     socket.current.emit('placeBet', bet);
     setHasBet(true);
   };
@@ -70,29 +117,110 @@ function CrashGame() {
     socket.current.emit('cashOut');
   };
 
-  // Adapt your drawGraph, updateParticles, etc., to use server-driven multiplier
-  // Remove local animation loop; trigger draws on 'multiplierUpdate'
-  const drawGraph = (ctx) => {
-    // Your existing draw code, but use multiplier from state
-    // For rocket position, derive from multiplier (e.g., inverse of your exp formula)
-    const time = Math.log(multiplier) / 0.5;  // Approximate from your exp formula
-    const rocketY = 400 - (Math.pow(Math.E, time * 0.5) * 100);
-    const rocketX = (Math.pow(Math.E, time * 0.5) - 1) * 100;
-
-    // Trail/particles as before...
-    // ...
-  };
-
   useEffect(() => {
-    const ctx = canvasRef.current.getContext('2d');
-    drawGraph(ctx);
-  }, [multiplier, phase]);
+    let frameId;
+    const animate = () => {
+      if (!canvasRef.current) return;
+      const ctx = canvasRef.current.getContext('2d');
+
+      const now = Date.now();
+      const timeSinceLastUpdate = (now - lastUpdateTimeRef.current) / 1000;
+      const estimatedMultiplier = lastMultiplierRef.current + (timeSinceLastUpdate * 0.1);
+
+      let time = Math.log(estimatedMultiplier) / 0.5;
+      const expTerm = Math.pow(Math.E, time * 0.5);
+      const worldX = (expTerm - 1) * FACTOR_X;
+      const worldY = (expTerm - 1) * FACTOR_Y;
+
+      let zoomScale = 1;
+      if (worldX > 0 && worldY > 0) {
+        const scaleX = (CANVAS_WIDTH - MARGIN) / worldX;
+        const scaleY = (CANVAS_HEIGHT - MARGIN) / worldY;
+        zoomScale = Math.min(1, Math.min(scaleX, scaleY));
+      }
+
+      ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+      ctx.beginPath();
+      ctx.moveTo(0, CANVAS_HEIGHT);
+      ctx.lineTo(CANVAS_WIDTH, CANVAS_HEIGHT);
+      ctx.moveTo(0, CANVAS_HEIGHT);
+      ctx.lineTo(0, 0);
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = SCALE * zoomScale;
+      ctx.stroke();
+
+      if (phase === 'running' && (now - (trailRef.current[trailRef.current.length - 1]?.timestamp || 0) > 100)) {
+        trailRef.current.push({ worldX, worldY, timestamp: now });
+        if (trailRef.current.length > 400) trailRef.current.shift();
+      }
+      ctx.beginPath();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 4 * zoomScale;
+      trailRef.current.forEach((point, i) => {
+        const drawX = point.worldX * zoomScale;
+        const drawY = CANVAS_HEIGHT - point.worldY * zoomScale;
+        if (i === 0) ctx.moveTo(drawX, drawY);
+        else ctx.lineTo(drawX, drawY);
+      });
+      ctx.stroke();
+
+      if (phase !== 'crashed') {
+        const drawRocketX = worldX * zoomScale;
+        const drawRocketY = CANVAS_HEIGHT - worldY * zoomScale;
+        ctx.beginPath();
+        ctx.arc(drawRocketX, drawRocketY, 10 * zoomScale, 0, Math.PI * 2);
+        ctx.fillStyle = '#fff';
+        ctx.fill();
+      }
+
+      particlesRef.current.forEach(p => {
+        const drawX = p.worldX * zoomScale;
+        const drawY = CANVAS_HEIGHT - p.worldY * zoomScale;
+        ctx.beginPath();
+        ctx.arc(drawX, drawY, Math.max(0, 6 * p.life) * zoomScale, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255, 128, 0, ${Math.max(0, p.life)})`;
+        ctx.fill();
+      });
+
+      if (phase === 'running') {
+        updateParticles(worldX, worldY);
+      }
+
+      if (phase === 'crashed') {
+        if (particlesRef.current.length < 400) {
+          for (let i = 0; i < 100; i++) {
+            particlesRef.current.push({
+              worldX: worldX + (Math.random() - 0.5) * 40,
+              worldY: worldY + (Math.random() - 0.5) * 40,
+              vx: (Math.random() - 0.5) * 10,
+              vy: (Math.random() - 0.5) * 10,
+              life: 1.0,
+            });
+          }
+        }
+        particlesRef.current.forEach(p => {
+          p.worldX += p.vx;
+          p.worldY += p.vy;
+          p.life -= 0.02;
+        });
+        particlesRef.current = particlesRef.current.filter(p => p.life > 0);
+      }
+
+      frameId = requestAnimationFrame(animate);
+    };
+
+    if (phase === 'running' || phase === 'crashed') {
+      animate();
+    }
+
+    return () => cancelAnimationFrame(frameId);
+  }, [phase, updateParticles, FACTOR_X, FACTOR_Y]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', fontFamily: 'Arial', background: '#222', color: '#fff' }}>
       <div style={{ margin: '10px', fontSize: '1.2em' }}>
         Balance: ${balance.toFixed(2)} | Multiplier: {multiplier.toFixed(2)}x | Phase: {phase} | {phase === 'waiting' ? `Countdown: ${countdown}s` : ''}
-        {phase === 'waiting' && (
+        {userName && phase === 'waiting' && (
           <>
             Bet: $
             <input
@@ -106,14 +234,50 @@ function CrashGame() {
           </>
         )}
       </div>
-      <canvas ref={canvasRef} width={600} height={400} style={{ border: '2px solid #fff', background: '#333' }} />
+      {!userName ? (
+        <div>
+          Enter your name:
+          <input value={nameInput} onChange={(e) => setNameInput(e.target.value)} />
+          <button onClick={setMyName}>Set Name</button>
+        </div>
+      ) : null}
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-start' }}>
+        <canvas ref={canvasRef} width={CANVAS_WIDTH} height={CANVAS_HEIGHT} style={{ border: '2px solid #fff', background: '#333' }} />
+        <div style={{ marginLeft: '20px', width: '200px' }}>
+          <h3>Leaderboard</h3>
+          {leaderboard.map((entry, i) => (
+            <div key={i}>{entry.name}: {entry.result} - ${entry.money}</div>
+          ))}
+        </div>
+      </div>
       {phase === 'running' && hasBet && (
-        <button onClick={cashOut} style={{ /* your styles */ }}>
+        <button onClick={cashOut} style={{
+          position: 'fixed',
+          left: '20px',
+          top: '50%',
+          transform: 'translateY(-50%)',
+          padding: '10px 20px',
+          fontSize: '1em',
+          cursor: 'pointer',
+          background: '#28a745',
+          color: '#fff',
+          border: 'none',
+          borderRadius: '5px',
+        }}>
           Cash Out
         </button>
       )}
-      {phase === 'waiting' && !hasBet && (
-        <button onClick={placeBet} style={{ /* your styles */ }}>
+      {phase === 'waiting' && !hasBet && userName && (
+        <button onClick={placeBet} style={{
+          padding: '10px 20px',
+          margin: '10px',
+          fontSize: '1em',
+          cursor: 'pointer',
+          background: '#007bff',
+          color: '#fff',
+          border: 'none',
+          borderRadius: '5px',
+        }}>
           Place Bet & Join
         </button>
       )}

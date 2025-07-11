@@ -1,39 +1,44 @@
+// game.js
 function generateCrashPoint() {
-  return 1 + Math.random() * 9;  // Same as your original
+  return 1 + Math.random() * 9;
 }
 
 function startGameLoop(io, gameState, activeBets, users) {
   let interval;
 
   const updateMultiplier = () => {
-    gameState.multiplier += 0.01;  // Increment slowly; adjust for realism (e.g., exponential)
+    gameState.multiplier += 0.01;
     io.emit('multiplierUpdate', gameState.multiplier);
 
     if (gameState.multiplier >= gameState.crashPoint) {
       gameState.phase = 'crashed';
       io.emit('gameCrashed', { crashPoint: gameState.crashPoint });
 
-      // Settle bets: losers get nothing, cashouts already handled
+      let leaderboard = [];
       activeBets.forEach((bet, userId) => {
-        if (!bet.cashedOutAt) {
-          // Lost the bet (do nothing, already deducted)
+        const user = users.get(userId);
+        if (user) {
+          const result = bet.cashedOutAt ? bet.cashedOutAt.toFixed(2) + 'x' : 'CRASHED';
+          const money = bet.cashedOutAt ? (bet.bet * bet.cashedOutAt).toFixed(2) : '0.00';
+          leaderboard.push({ name: user.name || 'Anonymous', result, money });
         }
-        activeBets.delete(userId);  // Clear for next round
       });
+      io.emit('leaderboardUpdate', leaderboard);
 
-      // Reset after 5 seconds
+      activeBets.clear();
+
       setTimeout(startWaitingPhase, 5000);
       return;
     }
 
-    interval = setTimeout(updateMultiplier, 100);  // Tick every 100ms; adjust
+    interval = setTimeout(updateMultiplier, 100);
   };
 
   const startRunningPhase = () => {
     gameState.phase = 'running';
     gameState.multiplier = 1;
     gameState.crashPoint = generateCrashPoint();
-    io.emit('gameStarted', { crashPoint: gameState.crashPoint });  // Don't send crashPoint to clients!
+    io.emit('gameStarted');
     updateMultiplier();
   };
 
@@ -50,14 +55,13 @@ function startGameLoop(io, gameState, activeBets, users) {
   };
 
   const startWaitingPhase = () => {
-    clearTimeout(interval);  // Clean up
+    clearTimeout(interval);
     gameState.phase = 'waiting';
     gameState.countdown = 10;
     io.emit('waitingPhase', { countdown: gameState.countdown });
     countdownTick();
   };
 
-  // Initial start
   startWaitingPhase();
 }
 
