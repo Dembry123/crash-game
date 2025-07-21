@@ -13,6 +13,7 @@ function CrashGame() {
   const [userName, setUserName] = useState('');
   const [nameInput, setNameInput] = useState('');
   const [leaderboard, setLeaderboard] = useState([]);
+  const [recentCrashes, setRecentCrashes] = useState([]);
   const canvasRef = useRef(null);
   const timeRef = useRef(0);
   const particlesRef = useRef([]);
@@ -21,12 +22,12 @@ function CrashGame() {
   const lastMultiplierRef = useRef(1);
   const lastUpdateTimeRef = useRef(Date.now());
 
-  const CANVAS_WIDTH = 1200;
-  const CANVAS_HEIGHT = 800;
+  const CANVAS_WIDTH = 840;
+  const CANVAS_HEIGHT = 560;
   const SCALE = 2;
   const FACTOR_X = CANVAS_WIDTH / 6;
   const FACTOR_Y = CANVAS_HEIGHT / 4;
-  const MARGIN = 50;
+  const MARGIN = 35;
 
   const updateParticles = useCallback((worldX, worldY) => {
     if (phase === 'running' && particlesRef.current.length < 200) {
@@ -86,7 +87,7 @@ function CrashGame() {
 
     socket.current.on('gameCrashed', ({ crashPoint }) => {
       setPhase('crashed');
-      alert(`Crashed at ${crashPoint.toFixed(2)}x!`);
+      setRecentCrashes(prev => [...prev, crashPoint].slice(-10));
     });
 
     socket.current.on('balanceUpdate', (newBalance) => setBalance(newBalance));
@@ -127,10 +128,9 @@ function CrashGame() {
       const timeSinceLastUpdate = (now - lastUpdateTimeRef.current) / 1000;
       const estimatedMultiplier = lastMultiplierRef.current + (timeSinceLastUpdate * 0.1);
 
-      let time = Math.log(estimatedMultiplier) / 0.5;
-      const expTerm = Math.pow(Math.E, time * 0.5);
-      const worldX = (expTerm - 1) * FACTOR_X;
-      const worldY = (expTerm - 1) * FACTOR_Y;
+      const t = estimatedMultiplier - 1;
+      const worldX = t * FACTOR_X;
+      const worldY = Math.pow(t, 1.5) * (FACTOR_Y / 2);
 
       let zoomScale = 1;
       if (worldX > 0 && worldY > 0) {
@@ -206,15 +206,38 @@ function CrashGame() {
         particlesRef.current = particlesRef.current.filter(p => p.life > 0);
       }
 
+      // Draw recent crash cards
+      const cardWidth = 42;
+      const cardHeight = 17.5;
+      const spacing = 7;
+      const marginRight = 7;
+      const marginTop = 7;
+      const numCards = recentCrashes.length;
+      const totalWidth = numCards * cardWidth + (numCards - 1) * spacing;
+      let startX = CANVAS_WIDTH - totalWidth - marginRight;
+      for (let i = 0; i < numCards; i++) {
+        const x = startX + i * (cardWidth + spacing);
+        const y = marginTop;
+        ctx.fillStyle = 'white';
+        ctx.fillRect(x, y, cardWidth, cardHeight);
+        ctx.strokeStyle = 'orange';
+        ctx.lineWidth = 1.4;
+        ctx.strokeRect(x, y, cardWidth, cardHeight);
+        const multi = recentCrashes[i];
+        const text = `${multi.toFixed(2)}x`;
+        ctx.font = '10px Arial';
+        ctx.fillStyle = 'green';
+        const textWidth = ctx.measureText(text).width;
+        ctx.fillText(text, x + (cardWidth - textWidth)/2, y + cardHeight/2 + 3.5);
+      }
+
       frameId = requestAnimationFrame(animate);
     };
 
-    if (phase === 'running' || phase === 'crashed') {
-      animate();
-    }
+    frameId = requestAnimationFrame(animate);
 
     return () => cancelAnimationFrame(frameId);
-  }, [phase, updateParticles, FACTOR_X, FACTOR_Y]);
+  }, [phase, updateParticles, FACTOR_X, FACTOR_Y, recentCrashes]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', fontFamily: 'Arial', background: '#222', color: '#fff' }}>

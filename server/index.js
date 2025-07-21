@@ -1,3 +1,4 @@
+// index.js
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
@@ -57,6 +58,19 @@ io.on('connection', (socket) => {
     socket.emit('balanceUpdate', user.balance);
     socket.emit('cashOutSuccess', { multiplier: gameState.multiplier, winnings });
     io.emit('playerCashedOut', { userId: socket.id, multiplier: gameState.multiplier });
+
+    let leaderboard = [];
+    activeBets.forEach((bet, userId) => {
+      if (bet.cashedOutAt) {
+        const user = users.get(userId);
+        if (user) {
+          const result = bet.cashedOutAt.toFixed(2) + 'x';
+          const money = (bet.bet * bet.cashedOutAt).toFixed(2);
+          leaderboard.push({ name: user.name || 'Anonymous', result, money });
+        }
+      }
+    });
+    io.emit('leaderboardUpdate', leaderboard);
   });
 
   socket.on('disconnect', () => {

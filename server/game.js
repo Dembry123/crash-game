@@ -59,6 +59,7 @@ function startGameLoop(io, gameState, activeBets, users) {
     gameState.phase = 'waiting';
     gameState.countdown = 10;
     io.emit('waitingPhase', { countdown: gameState.countdown });
+    io.emit('leaderboardUpdate', []);
     countdownTick();
   };
 
