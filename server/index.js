@@ -12,6 +12,8 @@ const io = socketIo(server, {
 
 const users = new Map();
 const activeBets = new Map();
+const recentCrashes = [];
+let roundId = 0; // Global incrementing round ID for provable fairness
 
 let gameState = {
   phase: 'waiting',
@@ -26,6 +28,7 @@ io.on('connection', (socket) => {
 
   const user = users.get(socket.id);
   socket.emit('gameUpdate', { ...gameState, balance: user.balance, name: user.name });
+  socket.emit('recentCrashes', recentCrashes);
 
   socket.on('setName', (name) => {
     const user = users.get(socket.id);
@@ -80,7 +83,7 @@ io.on('connection', (socket) => {
   });
 });
 
-startGameLoop(io, gameState, activeBets, users);
+startGameLoop(io, gameState, activeBets, users, recentCrashes, () => roundId++); // Pass round incrementor
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
