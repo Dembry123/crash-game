@@ -21,14 +21,7 @@ function CrashGame() {
   const socket = useRef(null);
   const lastMultiplierRef = useRef(1);
   const lastUpdateTimeRef = useRef(Date.now());
-  const [crashMultiplier, setCrashMultiplier] = useState(0); // Store crash point for 'crashed' phase
-
-  /*
-   * Added states for provably fair verification:
-   * - roundId: Unique ID for each game round, received from server.
-   * - serverSeedHash: Pre-committed hash of the secret seed, received during waiting phase.
-   * - revealedServerSeed: The actual seed revealed after crash, used for client-side verification.
-   */
+  const [crashMultiplier, setCrashMultiplier] = useState(0); 
   const [roundId, setRoundId] = useState(0);
   const [serverSeedHash, setServerSeedHash] = useState('');
   const [revealedServerSeed, setRevealedServerSeed] = useState('');
@@ -40,11 +33,6 @@ function CrashGame() {
   const FACTOR_Y = CANVAS_HEIGHT / 4;
   const MARGIN = 35;
 
-  /*
-   * Extracted particle addition logic for exhaust into updateParticles.
-   * Particle updates (movement, life decay, filtering) are always performed in the animate loop,
-   * regardless of phase, to ensure existing particles continue to update and fade after a crash.
-   */
   const updateParticles = useCallback((worldX, worldY) => {
     if (phase === 'running' && particlesRef.current.length < 200) {
       for (let i = 0; i < 4; i++) {
@@ -80,11 +68,7 @@ function CrashGame() {
       lastMultiplierRef.current = newMultiplier;
       lastUpdateTimeRef.current = Date.now();
     });
-
-    /*
-     * Updated 'waitingPhase' handler to receive and set roundId and serverSeedHash for provably fair commitment.
-     * This allows clients to know the committed hash before betting/running phase.
-     */
+  
     socket.current.on('waitingPhase', ({ countdown, roundId, serverSeedHash }) => {
       setPhase('waiting');
       setMultiplier(1);
@@ -104,10 +88,7 @@ function CrashGame() {
       setPhase('running');
     });
 
-    /*
-     * Updated 'gameCrashed' handler to receive the revealed serverSeed along with crashPoint.
-     * This triggers the verification useEffect below.
-     */
+   
     socket.current.on('gameCrashed', ({ crashPoint, serverSeed }) => {
       setPhase('crashed');
       setCrashMultiplier(crashPoint);
@@ -330,7 +311,6 @@ function CrashGame() {
         ctx.fillText(text, x + (cardWidth - textWidth)/2, y + cardHeight/2 + 3.5);
       }
 
-      // Draw the dynamic text (multiplier or countdown) in the middle of the canvas
       let displayText = '';
       if (phase === 'running') {
         displayText = `${estimatedMultiplier.toFixed(2)}x`;
@@ -359,19 +339,6 @@ function CrashGame() {
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', fontFamily: 'Arial', background: '#222', color: '#fff' }}>
       <div style={{ margin: '10px', fontSize: '1.2em' }}>
         Balance: ${balance.toFixed(2)} | Phase: {phase}
-        {userName && phase === 'waiting' && (
-          <>
-            Bet: $
-            <input
-              type="number"
-              value={bet}
-              min="1"
-              max={balance}
-              style={{ width: '60px' }}
-              onChange={(e) => setBet(Math.max(1, Math.min(balance, parseFloat(e.target.value))))}
-            />
-          </>
-        )}
       </div>
       {!userName ? (
         <div>
@@ -381,6 +348,39 @@ function CrashGame() {
         </div>
       ) : null}
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-start' }}>
+          <div style={{ 
+            width: '200px', 
+            marginRight: '20px', 
+            padding: '10px', 
+            background: '#fff', 
+            border: '2px solid orange', 
+            borderRadius: '5px', 
+            color: '#000' 
+          }}>
+            <div style={{ marginBottom: '10px' }}>
+              Bet: $
+              <input
+                type="number"
+                value={bet}
+                min="1"
+                max={balance}
+                style={{ width: '60px' }}
+                onChange={(e) => setBet(Math.max(1, Math.min(balance, parseFloat(e.target.value))))}
+              />
+            </div>
+            <button onClick={placeBet} style={{
+              padding: '10px 20px',
+              fontSize: '1em',
+              cursor: 'pointer',
+              background: phase === 'running' ? '#cccccc' : '#007bff',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '5px',
+              width: '100%'
+            }}>
+              Place Bet & Join
+            </button>
+          </div>
         <canvas ref={canvasRef} width={CANVAS_WIDTH} height={CANVAS_HEIGHT} style={{ border: '2px solid #fff', background: '#333' }} />
         <div style={{ marginLeft: '20px', width: '200px' }}>
           <h3>Leaderboard</h3>
@@ -406,32 +406,8 @@ function CrashGame() {
           Cash Out
         </button>
       )}
-      {phase === 'waiting' && !hasBet && userName && (
-        <button onClick={placeBet} style={{
-          padding: '10px 20px',
-          margin: '10px',
-          fontSize: '1em',
-          cursor: 'pointer',
-          background: '#007bff',
-          color: '#fff',
-          border: 'none',
-          borderRadius: '5px',
-        }}>
-          Place Bet & Join
-        </button>
-      )}
     </div>
   );
 }
 
 export default CrashGame;
-
-/*
- * FIX: Integrated provably fair verification into the client code.
- * - Added import for CryptoJS to handle SHA256 and HMAC-SHA256 on the client side (browser-compatible crypto).
- * - Added states: roundId, serverSeedHash, revealedServerSeed to store provably fair data.
- * - Updated socket handlers: 'waitingPhase' now sets roundId and serverSeedHash; 'gameCrashed' sets revealedServerSeed.
- * - Added a useEffect that runs after crash to verify: checks if hash of revealed seed matches committed hash, then recomputes crash point using HMAC-SHA256(seed, roundId), extracts/normalizes/scales, and compares to server-provided crashMultiplier.
- * - Logs verification result to console; no UI changes yet, but could be extended (e.g., add a button to trigger/show results).
- * - No changes to animation or other logic; verification is passive and doesn't affect gameplay.
- */
